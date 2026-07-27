@@ -6,3 +6,6 @@ secrets/
 __pycache__/
 .pytest_cache/
 *.pyc
+
+# Excel lock/temporary artefacts in the metrics watch directory
+~$*.xlsx

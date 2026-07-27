@@ -1,5 +1,5 @@
 # MAXONE experiment configuration
-schema_version: 1
+schema_version: 2
 
 experiment:
   experiment_id: "REPLACE_WITH_EXPERIMENT_ID"
@@ -7,20 +7,35 @@ experiment:
   timezone: "Asia/Tokyo"
 
 paths:
-  # Absolute path where MaxLab Live automatically exports completed CSV files.
-  csv_watch_directory: null
+  # Absolute path where MaxLab Live exports metrics workbooks
+  # (metrics_data_<YYYYMMDD>_<HHMMSS>.xlsx).
+  metrics_watch_directory: null
   accepted_archive_directory: "./runtime/archive"
   quarantine_directory: "./runtime/quarantine"
   state_directory: "./runtime/state"
   log_directory: "./runtime/logs"
 
-csv_watcher:
-  filename_glob: "*.csv"
+metrics_watcher:
+  filename_glob: "metrics_data_*.xlsx"
   poll_interval_seconds: 5
   stable_for_seconds: 15
-  csv_timeout_minutes: 10
-  reject_files_older_than_cycle_start: true
+  metrics_timeout_minutes: 10
   hash_algorithm: sha256
+
+  # Excel lock/temporary artefacts must never be treated as input.
+  ignore_filename_prefixes: ["~$", ".", "_"]
+
+  # A workbook may be re-exported with recordings appended, so the workbook
+  # hash alone is not a sufficient idempotency key. Deduplication is on the
+  # recording identity (Meta Data.Folder Path). See CLAUDE.md section 8.1.
+  deduplicate_on: recording_identity
+  reject_already_consumed_recording: true
+  allow_repeated_workbook_hash: true
+
+  # The filename timestamp is the export time, not a recording time.
+  # Staleness is judged from the selected recording's Start/Stop Time.
+  staleness_source: recording_start_stop_time
+  reject_recordings_older_than_cycle_start: true
 
 adaptive_policy:
   # Cycle 0 records baseline without transmitting a stimulation sequence.
@@ -39,11 +54,13 @@ adaptive_policy:
   maximum_total_experiment_minutes: null
 
 quality_control:
-  minimum_valid_rows: 1
-  maximum_missing_fraction: 0.0
+  # Workbook-level and recording-level QC thresholds live in
+  # config/metrics_schema.yaml, which owns the file format.
+  # These are the run-level gates.
+  fail_on_ambiguous_recording_selection: true
+  fail_on_missing_recording: true
   fail_on_unknown_units: true
-  fail_on_non_monotonic_time: true
-  fail_on_duplicate_rows: true
+  fail_on_qc_flag: true
 
 runtime:
   require_hardware_environment_gate: true
@@ -55,13 +72,17 @@ runtime:
   ledger_backend: sqlite
 
 required_before_armed:
-  - paths.csv_watch_directory
+  - paths.metrics_watch_directory
   - adaptive_policy.reference_threshold_hz
   - adaptive_policy.amplitude_step_mV
   - adaptive_policy.maximum_amplitude_mV
   - adaptive_policy.maximum_cycles
   - adaptive_policy.maximum_total_experiment_minutes
-  - csv_schema.calculation_mode
+  - metrics_schema.recording_selection.strategy
+  - metrics_schema.expected_acquisition.duration_seconds_min
+  - metrics_schema.expected_acquisition.duration_seconds_max
+  - metrics_schema.quality_control.minimum_active_area_percent
+  - metrics_schema.quality_control.minimum_active_electrodes
   - stimulation.protocol_id
   - stimulation.stimulation_electrodes
   - stimulation.waveform

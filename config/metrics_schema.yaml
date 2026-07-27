@@ -1,0 +1,190 @@
+# MaxLab Live metrics workbook interpretation
+#
+# Input is the MaxLab Live metrics export: metrics_data_<YYYYMMDD>_<HHMMSS>.xlsx
+# One workbook may contain several unrelated recordings. See CLAUDE.md section 2.
+schema_version: 2
+
+file_format:
+  type: xlsx
+  filename_glob: "metrics_data_*.xlsx"
+  header_row: 0
+  # The literal string "N/A" is the missing marker in this export.
+  # It appears inside otherwise-numeric columns.
+  missing_markers: ["N/A", "NA", "NaN", ""]
+  # Reject any cell that fails numeric conversion. Never silently drop it.
+  numeric_coercion: reject
+  # Date and time cells are strings, not Excel date serials.
+  date_format: "%Y-%m-%d"
+  time_format: "%H:%M:%S"
+  # The filename timestamp is the export time, not a recording time.
+  # Never use it as a recording timestamp.
+  filename_timestamp_is_export_time: true
+
+sheets:
+  meta_data: "Meta Data"
+  analysis_parameters: "Analysis Parameters"
+  activity_well_level: "Activity - Well Level"
+  network_well_level: "Network - Well Level"
+  network_burst_level: "Network - Burst Level"
+
+  # Fail closed when the workbook contains a sheet set other than the above.
+  require_exact_sheet_set: true
+
+# ---------------------------------------------------------------------------
+# Instance is the join key across every sheet.
+# One recording produces two analysis instances.
+# ---------------------------------------------------------------------------
+instance_join:
+  instance_column: "Instance"
+  analysis_type_column: "Analysis Type"
+  activity_analysis_type: "Activity Analysis"
+  burst_analysis_type: "ISI-N Burst Detector"
+
+  # In the reference file the Activity instances are odd and the burst
+  # instances even. That is an observed coincidence, not a guarantee.
+  # Selection MUST go through analysis_type_column.
+  allow_parity_based_selection: false
+
+# ---------------------------------------------------------------------------
+# Recording identity and selection.
+# A workbook may hold many recordings; exactly one must survive selection.
+# ---------------------------------------------------------------------------
+recording_identity:
+  primary_key_column: "Folder Path"
+  wellplate_id_column: "Wellplate ID"
+  assay_run_id_column: "Assay Run ID"
+  well_number_column: "Well Number"
+  assay_tag_column: "Assay Tag"
+  # Assay Run ID is not unique across wellplates. Never key on it alone.
+  allow_assay_run_id_alone: false
+
+recording_selection:
+  # How the active cycle's recording is located inside the workbook.
+  # Allowed: folder_path_exact | folder_path_prefix | wellplate_and_run_id
+  strategy: null
+
+  # strategy: folder_path_exact / folder_path_prefix
+  folder_path: null
+
+  # strategy: wellplate_and_run_id
+  wellplate_id: null
+  well_number: null
+  assay_run_id: null
+
+  # Selection must yield exactly one recording.
+  # Fallbacks are forbidden: no "only row", no "first row", no "latest row".
+  require_exactly_one_match: true
+  on_zero_matches: fault      # reason_code RECORDING_NOT_FOUND
+  on_multiple_matches: fault  # reason_code RECORDING_AMBIGUOUS
+  allow_fallback_to_single_row: false
+  allow_fallback_to_latest: false
+
+# ---------------------------------------------------------------------------
+# The decision metric. Already aggregated to well level by MaxLab Live.
+# No aggregation and no spike counting is performed by this project.
+# ---------------------------------------------------------------------------
+decision_metric:
+  name: mean_firing_frequency_hz
+  unit: Hz
+  sheet: activity_well_level
+  column: "Mean Firing Rate [Hz]"
+  select_instance_of_analysis_type: activity_analysis_type
+
+  # Mean Firing Rate is averaged only over electrodes that passed the
+  # Activity Analysis detection thresholds, not over all recorded electrodes.
+  # Active Area must be read alongside it. See quality_control below.
+  denominator_is_all_recorded_electrodes: false
+
+  # Do not substitute another column without an explicit, tested policy change.
+  allow_substitute_columns: false
+
+# Scoped by sheet on purpose. Some header names occur in more than one sheet
+# (for example "Date" and "Instance"), so an unscoped name is ambiguous and
+# CLAUDE.md section 8.2 requires ambiguous mappings to be rejected.
+supporting_columns:
+  activity_well_level:
+    active_area_percent: "Active Area [%]"
+    firing_rate_std: "Firing Rate std [Hz]"
+    firing_rate_cv: "Firing Rate CV"
+    median_firing_rate: "Median Firing Rate [Hz]"
+  meta_data:
+    duration_seconds: "Duration per Configuration [s]"
+    number_of_configurations: "Number of Configurations"
+    sampling_frequency_hz: "Sampling Frequency [Hz]"
+    gain: "Gain"
+    lsb_uv: "LSB [µV]"
+    hpf_hz: "HPF [Hz]"
+    start_time: "Start Time"
+    stop_time: "Stop Time"
+    date: "Date"
+
+# ---------------------------------------------------------------------------
+# Acquisition settings expected for every accepted recording.
+# A mismatch means the recording was made under different conditions and
+# must not feed the stimulation decision.
+# ---------------------------------------------------------------------------
+expected_acquisition:
+  sampling_frequency_hz: 20000
+  gain: 512
+  lsb_uv: 6.294
+  hpf_hz: 1
+  number_of_configurations: 1
+  # Observed 300.018 to 300.084 s in the reference file. Never hard-code 300.
+  duration_seconds_min: null
+  duration_seconds_max: null
+
+# ---------------------------------------------------------------------------
+# Analysis parameters expected for the selected Activity Analysis instance.
+# Values below are those observed in the reference export.
+# ---------------------------------------------------------------------------
+expected_analysis_parameters:
+  activity_analysis:
+    firing_rate_threshold_hz: 0.1
+    amplitude_threshold_uv: 20
+    isi_threshold_ms: 200
+  isi_n_burst_detector:
+    n: 80
+  fail_on_mismatch: true
+
+# ---------------------------------------------------------------------------
+# Quality control. Any failure blocks stimulation.
+# ---------------------------------------------------------------------------
+quality_control:
+  # Reference file P005211: Mean Firing Rate 0.19 Hz, Active Area 0.10 %,
+  # std / CV / percentiles all "N/A" -> exactly one active electrode.
+  # The value is a valid float but is meaningless as a well-level rate.
+  minimum_active_area_percent: null
+  minimum_active_electrodes: null
+
+  # A present mean with a missing dispersion statistic indicates a single
+  # contributing electrode. Treat it as a QC failure, not as missing data.
+  fail_when_dispersion_missing: true
+
+  reject_negative_rate: true
+  reject_non_finite: true
+  fail_on_unknown_units: true
+  fail_on_acquisition_mismatch: true
+  fail_on_analysis_parameter_mismatch: true
+  require_recording_window_within_cycle: true
+
+# ---------------------------------------------------------------------------
+# Known sheet quirks the reader must handle. Documented so the behaviour is
+# a tested requirement rather than an accident of the parsing library.
+# ---------------------------------------------------------------------------
+known_quirks:
+  network_burst_level:
+    # Column A has no header: a 0..N-1 DataFrame index remnant.
+    has_unnamed_index_column: true
+    # Well Group Name / Color / Control / Assay Tag appear only on the second
+    # row of each instance block; Date / Wellplate ID / Well Number /
+    # Assay Run ID appear on every row except that one.
+    metadata_split_across_rows: true
+    # Therefore: never source recording metadata from this sheet.
+    use_as_metadata_source: false
+    # A recording with zero bursts still emits placeholder rows.
+    emits_placeholder_rows_when_no_bursts: true
+    # Spikes per Burst / Spikes per Burst per Electrode implies a per-well
+    # constant (~166.7, ~248.5, ~190.0) whose definition is undocumented.
+    per_electrode_denominator_documented: false
+
+  read_columns_by_header_name_only: true
