@@ -1,0 +1,58 @@
+# MaxOne stimulation configuration
+schema_version: 1
+
+hardware:
+  device_model: "MaxOne"
+  maxlab_live_version: null
+  api_version: null
+  mxwserver_required: true
+
+  # Verify against the installed MaxLab/API documentation.
+  dac_neutral_code: 512
+  nominal_mV_per_dac_bit: 2.9
+  voltage_amplifier_inverts_polarity: true
+
+  emergency_stop_procedure: null
+
+stimulation:
+  protocol_id: "adaptive_biphasic_v1"
+  mode: voltage
+
+  stimulation_electrodes: []
+  recording_electrodes: []
+
+  amplitude_source: adaptive_policy
+  baseline_behavior: record_without_stimulation
+
+  waveform:
+    type: biphasic
+    charge_balanced: true
+    phase_order: cathodic_then_anodic
+    phase_duration_samples: null
+    inter_phase_interval_samples: 0
+    pulses_per_train: null
+    inter_pulse_interval_samples: null
+    trains_per_cycle: 1
+    inter_train_interval_seconds: null
+    return_to_neutral_after_each_pulse: true
+
+  hard_limits:
+    maximum_absolute_amplitude_mV: null
+    maximum_phase_duration_samples: null
+    maximum_pulses_per_train: null
+    maximum_trains_per_cycle: 1
+    minimum_inter_pulse_interval_samples: null
+    minimum_inter_train_interval_seconds: null
+    maximum_cumulative_stimulations: null
+    maximum_cumulative_charge_metric: null
+
+recording:
+  record_before_stimulation_seconds: null
+  record_after_stimulation_seconds: null
+  save_detected_spikes: true
+  save_raw_voltage: false
+
+routing:
+  require_unique_stimulation_unit_per_electrode: true
+  require_array_download: true
+  require_offset_compensation: true

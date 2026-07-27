@@ -1,0 +1,71 @@
+# MAXONE experiment configuration
+schema_version: 1
+
+experiment:
+  experiment_id: "REPLACE_WITH_EXPERIMENT_ID"
+  mode: dry_run  # simulate | dry_run | armed
+  timezone: "Asia/Tokyo"
+
+paths:
+  # Absolute path where MaxLab Live automatically exports completed CSV files.
+  csv_watch_directory: null
+  accepted_archive_directory: "./runtime/archive"
+  quarantine_directory: "./runtime/quarantine"
+  state_directory: "./runtime/state"
+  log_directory: "./runtime/logs"
+
+csv_watcher:
+  filename_glob: "*.csv"
+  poll_interval_seconds: 5
+  stable_for_seconds: 15
+  csv_timeout_minutes: 10
+  reject_files_older_than_cycle_start: true
+  hash_algorithm: sha256
+
+adaptive_policy:
+  # Cycle 0 records baseline without transmitting a stimulation sequence.
+  baseline_amplitude_mV: 0.0
+
+  # REQUIRED before armed mode:
+  reference_threshold_hz: null
+  amplitude_step_mV: null
+  maximum_amplitude_mV: null
+
+  threshold_comparison: greater_than_or_equal
+  action_at_or_above_threshold: complete
+  action_when_next_step_exceeds_maximum: complete
+  maximum_cycles: null
+  minimum_cooldown_seconds: 120
+  maximum_total_experiment_minutes: null
+
+quality_control:
+  minimum_valid_rows: 1
+  maximum_missing_fraction: 0.0
+  fail_on_unknown_units: true
+  fail_on_non_monotonic_time: true
+  fail_on_duplicate_rows: true
+
+runtime:
+  require_hardware_environment_gate: true
+  hardware_environment_variable: "MAXONE_HARDWARE_ENABLED"
+  hardware_environment_required_value: "1"
+  require_exclusive_device_lock: true
+  resume_after_restart: false
+  structured_log_format: jsonl
+  ledger_backend: sqlite
+
+required_before_armed:
+  - paths.csv_watch_directory
+  - adaptive_policy.reference_threshold_hz
+  - adaptive_policy.amplitude_step_mV
+  - adaptive_policy.maximum_amplitude_mV
+  - adaptive_policy.maximum_cycles
+  - adaptive_policy.maximum_total_experiment_minutes
+  - csv_schema.calculation_mode
+  - stimulation.protocol_id
+  - stimulation.stimulation_electrodes
+  - stimulation.waveform
+  - stimulation.maximum_cumulative_stimulations
+  - hardware.maxlab_live_version
+  - hardware.api_version
+  - hardware.emergency_stop_procedure

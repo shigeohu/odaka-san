@@ -1,0 +1,49 @@
+# CSV interpretation configuration
+schema_version: 1
+
+# Must be finalized after inspecting representative CSV files.
+# Allowed: precomputed_rate | spike_events
+calculation_mode: null
+
+file_format:
+  encoding: "utf-8-sig"
+  delimiter: ","
+  decimal_separator: "."
+  header_row: 0
+
+columns:
+  time_column: null
+  time_unit: null          # s | ms | us | sample_index
+  electrode_column: null
+  channel_column: null
+  firing_rate_column: null
+  firing_rate_unit: null   # Hz
+  well_column: null
+
+precomputed_rate:
+  aggregation_across_rows: mean
+  aggregation_across_electrodes: mean
+  include_electrodes: []
+  exclude_electrodes: []
+
+spike_events:
+  recording_duration_source: null
+  # from_time_column | fixed_seconds | experiment_metadata
+  fixed_recording_duration_seconds: null
+  electrode_denominator: null
+  # active_electrodes | configured_recording_electrodes | one
+  include_electrodes: []
+  exclude_electrodes: []
+
+validation:
+  require_all_mapped_columns: true
+  allow_unknown_columns: true
+  allow_empty_rows: false
+  allow_duplicate_rows: false
+  require_monotonic_time: true
+  numeric_coercion: reject
+  accepted_missing_markers: ["", "NA", "NaN"]
+
+output_metric:
+  name: mean_firing_frequency_hz
+  unit: Hz
