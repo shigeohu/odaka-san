@@ -86,8 +86,8 @@ def test_electrode_estimate_is_marked_unverified(reference_workbook, runnable_co
     result, _ = analyse(reference_workbook, runnable_config())
 
     assert result.electrodes.verified is False
-    assert result.electrodes.denominator == 1024
-    assert result.electrodes.count == pytest.approx(0.88 / 100 * 1024)
+    assert result.electrodes.denominator == 1020
+    assert result.electrodes.count == pytest.approx(0.88 / 100 * 1020)
 
 
 def test_missing_rate_is_rejected(tmp_path, synthetic_config):

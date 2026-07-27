@@ -1,5 +1,5 @@
 # MaxOne stimulation configuration
-schema_version: 1
+schema_version: 2
 
 hardware:
   device_model: "MaxOne"
@@ -7,12 +7,53 @@ hardware:
   api_version: null
   mxwserver_required: true
 
-  # Verify against the installed MaxLab/API documentation.
+  # Documented: MaxOne samples at 20 kHz (MaxLab Live Manual v25.1, Meta Data
+  # table). Used to convert the manual's microsecond limits into samples.
+  sampling_frequency_hz: 20000
+
+  # NOT verified. The manual documents the GUI, not the Python API; it states
+  # only that LSB derives from a 10-bit (1024-value) sampling resolution and
+  # that increasing gain decreases LSB. Do not convert volts to DAC bits until
+  # these are confirmed against the installed API.
   dac_neutral_code: 512
   nominal_mV_per_dac_bit: 2.9
   voltage_amplifier_inverts_polarity: true
+  calibration_verified: false
 
   emergency_stop_procedure: null
+
+# ---------------------------------------------------------------------------
+# Limits taken verbatim from MaxLab Live Manual v25.1.
+# These are device and vendor-recommendation limits. They bound the
+# experiment's own limits below; they do not replace them.
+# ---------------------------------------------------------------------------
+documented_device_limits:
+  source: "MaxLab Live Manual v25.1"
+
+  # "For MaxOne+ Chips with PEDOT electrodes, the recommended maximum
+  # Stimulation Amplitude is 600 mV. Exceeding this value may compromise
+  # electrode integrity and experiment reproducibility."
+  recommended_maximum_amplitude_mV: 600.0
+  absolute_maximum_amplitude_mV: 1000.0
+  minimum_assay_amplitude_mV: 3.0
+
+  phase_duration_us_min: 100.0
+  phase_duration_us_max: 1000.0
+  phase_duration_us_step: 50.0
+
+  pulses_per_burst_max: 10000
+  interpulse_interval_ms_max: 10000.0
+  bursts_max: 99
+  interburst_interval_seconds_min: 0.01
+  interburst_interval_seconds_max: 600.0
+
+  # "Thirty-two (32) stimulation channels can be simultaneously connected to
+  # electrodes for stimulation."
+  simultaneous_stimulation_channels: 32
+
+  # Charge injection capacity is deferred by the manual to MaxWell's separate
+  # Electrical Stimulation Guide, which has not been obtained.
+  charge_injection_capacity_documented: false
 
 stimulation:
   protocol_id: "adaptive_biphasic_v1"
@@ -27,7 +68,15 @@ stimulation:
   waveform:
     type: biphasic
     charge_balanced: true
-    phase_order: cathodic_then_anodic
+
+    # The manual describes the pulse in terms of the voltage signal: "The
+    # stimulation pulses are voltage in nature and biphasic in shape, with the
+    # positive phase provided first." Expressed here in voltage sign, not in
+    # anodic/cathodic terms -- which of those the positive phase corresponds to
+    # at the electrode depends on voltage_amplifier_inverts_polarity, and that
+    # is not verified.
+    phase_order: positive_then_negative
+
     phase_duration_samples: null
     inter_phase_interval_samples: 0
     pulses_per_train: null
@@ -37,6 +86,9 @@ stimulation:
     return_to_neutral_after_each_pulse: true
 
   hard_limits:
+    # Must not exceed documented_device_limits.recommended_maximum_amplitude_mV
+    # unless the Electrical Stimulation Guide is obtained and an operator
+    # explicitly authorises more.
     maximum_absolute_amplitude_mV: null
     maximum_phase_duration_samples: null
     maximum_pulses_per_train: null

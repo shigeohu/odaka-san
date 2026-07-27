@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -146,3 +147,115 @@ def test_armed_gate_passes_when_complete(runnable_config):
         }
     )
     check_armed_gate(config, environ={"MAXONE_HARDWARE_ENABLED": "1"})
+
+
+# --- limits documented in MaxLab Live Manual v25.1 --------------------------
+
+
+def test_configured_amplitude_cannot_exceed_the_vendor_recommended_maximum(config_factory):
+    """"the recommended maximum Stimulation Amplitude is 600 mV"."""
+    with pytest.raises(ConfigError) as exc:
+        config_factory(
+            **{
+                "stimulation_protocols.stimulation.hard_limits."
+                "maximum_absolute_amplitude_mV": 700.0
+            }
+        )
+    assert "600" in str(exc.value)
+
+
+def test_amplitude_at_the_recommended_maximum_is_allowed(config_factory):
+    config = config_factory(
+        **{
+            "stimulation_protocols.stimulation.hard_limits."
+            "maximum_absolute_amplitude_mV": 600.0
+        }
+    )
+    limits = config.stimulation_protocols.stimulation.hard_limits
+    assert limits.maximum_absolute_amplitude_mV == Decimal("600.0")
+
+
+def test_phase_duration_outside_the_documented_range_is_rejected(config_factory):
+    """Documented range is 100-1000 us; at 20 kHz that is 2-20 samples."""
+    with pytest.raises(ConfigError) as exc:
+        config_factory(
+            **{"stimulation_protocols.stimulation.waveform.phase_duration_samples": 1}
+        )
+    assert "us" in str(exc.value)
+
+    with pytest.raises(ConfigError):
+        config_factory(
+            **{"stimulation_protocols.stimulation.waveform.phase_duration_samples": 21}
+        )
+
+    # 4 samples = 200 us, the documented default.
+    config_factory(
+        **{"stimulation_protocols.stimulation.waveform.phase_duration_samples": 4}
+    )
+
+
+def test_more_than_32_stimulation_electrodes_is_rejected(config_factory):
+    """"Thirty-two (32) stimulation channels can be simultaneously connected"."""
+    with pytest.raises(ConfigError) as exc:
+        config_factory(
+            **{
+                "stimulation_protocols.stimulation.stimulation_electrodes": list(
+                    range(33)
+                )
+            }
+        )
+    assert "32" in str(exc.value)
+
+    config_factory(
+        **{"stimulation_protocols.stimulation.stimulation_electrodes": list(range(32))}
+    )
+
+
+def test_electrode_denominator_cannot_exceed_the_routing_maximum(config_factory):
+    """"at most 1020 electrodes can be selected in a single configuration"."""
+    with pytest.raises(ConfigError) as exc:
+        config_factory(
+            **{
+                "metrics_schema.quality_control.minimum_active_electrodes": 3,
+                "metrics_schema.quality_control."
+                "active_area_denominator_electrodes": 1024,
+            }
+        )
+    assert "1020" in str(exc.value)
+
+
+def test_calibration_cannot_be_declared_verified(config_factory):
+    """Only an operator on the acquisition machine can confirm this."""
+    with pytest.raises(ConfigError):
+        config_factory(**{"stimulation_protocols.hardware.calibration_verified": True})
+
+
+def test_charge_injection_capacity_cannot_be_declared_documented(config_factory):
+    """The Electrical Stimulation Guide has not been obtained."""
+    with pytest.raises(ConfigError):
+        config_factory(
+            **{
+                "stimulation_protocols.documented_device_limits."
+                "charge_injection_capacity_documented": True
+            }
+        )
+
+
+def test_burst_denominator_discrepancy_stays_acknowledged(config_factory):
+    """The manual's definition does not reproduce the reference export."""
+    with pytest.raises(ConfigError):
+        config_factory(
+            **{
+                "metrics_schema.known_quirks.network_burst_level."
+                "per_electrode_denominator_reproduces_documentation": True
+            }
+        )
+
+
+def test_pulse_phase_order_matches_the_manual(config_factory):
+    """"the positive phase provided first", stated in voltage sign."""
+    config = config_factory()
+    assert (
+        config.stimulation_protocols.stimulation.waveform.phase_order
+        == "positive_then_negative"
+    )

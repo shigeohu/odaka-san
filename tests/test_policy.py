@@ -32,7 +32,7 @@ def result(rate: float | None) -> AnalysisResult:
         source_instance=3,
         identity=RecordingIdentity("/p", "P1", "000001", 1),
         active_area_percent=1.0,
-        electrodes=ElectrodeEstimate(count=10.0, denominator=1024),
+        electrodes=ElectrodeEstimate(count=10.0, denominator=1020),
         firing_rate_std_hz=0.2,
         firing_rate_cv=0.4,
         duration_seconds=300.02,

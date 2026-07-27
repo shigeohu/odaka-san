@@ -341,6 +341,9 @@ class MetricsQualityControlSection(Strict):
     minimum_active_area_percent: float | None = Field(default=None, ge=0)
     minimum_active_electrodes: int | None = Field(default=None, ge=1)
     active_area_denominator_electrodes: int | None = Field(default=None, ge=1)
+    #: "at most 1020 electrodes can be selected in a single configuration"
+    #: -- MaxLab Live Manual v25.1.
+    maximum_routed_electrodes: int = Field(gt=0)
     fail_when_dispersion_missing: bool
     reject_negative_rate: bool
     reject_non_finite: bool
@@ -362,13 +365,36 @@ class MetricsQualityControlSection(Strict):
             )
         return self
 
+    @model_validator(mode="after")
+    def _denominator_fits_the_array(self) -> MetricsQualityControlSection:
+        denominator = self.active_area_denominator_electrodes
+        if denominator is not None and denominator > self.maximum_routed_electrodes:
+            raise ValueError(
+                f"active_area_denominator_electrodes {denominator} exceeds the documented "
+                f"maximum of {self.maximum_routed_electrodes} routed electrodes per "
+                "configuration"
+            )
+        return self
+
 
 class BurstLevelQuirks(Strict):
     has_unnamed_index_column: bool
     metadata_split_across_rows: bool
     use_as_metadata_source: bool
     emits_placeholder_rows_when_no_bursts: bool
-    per_electrode_denominator_documented: bool
+    #: The manual defines the field, but its stated definition does not
+    #: reproduce the reference export's numbers. See CLAUDE.md section 4.2.
+    per_electrode_denominator_reproduces_documentation: bool
+
+    @model_validator(mode="after")
+    def _denominator_discrepancy_stays_acknowledged(self) -> BurstLevelQuirks:
+        if self.per_electrode_denominator_reproduces_documentation:
+            raise ValueError(
+                "per_electrode_denominator_reproduces_documentation must stay false until "
+                "the ~166.8 / ~247.8 / ~190.2 divisors in the reference export can be "
+                "reconciled with the manual's stated definition"
+            )
+        return self
 
     @model_validator(mode="after")
     def _not_a_metadata_source(self) -> BurstLevelQuirks:
@@ -419,16 +445,61 @@ class HardwareSection(Strict):
     maxlab_live_version: str | None
     api_version: str | None
     mxwserver_required: bool
+    sampling_frequency_hz: int = Field(gt=0)
     dac_neutral_code: int
     nominal_mV_per_dac_bit: float
     voltage_amplifier_inverts_polarity: bool
+    calibration_verified: bool
     emergency_stop_procedure: str | None
+
+    @model_validator(mode="after")
+    def _calibration_stays_unverified(self) -> HardwareSection:
+        # Flipping this claims the volts-to-bits calibration has been checked
+        # against the installed hardware. Only an operator on the acquisition
+        # machine can do that, and the vendor GUI manual does not document it.
+        if self.calibration_verified:
+            raise ValueError(
+                "calibration_verified must stay false until the installed MaxLab/API "
+                "calibration has been confirmed on the acquisition machine"
+            )
+        return self
+
+
+class DocumentedDeviceLimits(Strict):
+    """Limits quoted from the vendor manual. Never widened by this project."""
+
+    source: str
+    recommended_maximum_amplitude_mV: Amplitude
+    absolute_maximum_amplitude_mV: Amplitude
+    minimum_assay_amplitude_mV: Amplitude
+    phase_duration_us_min: float = Field(gt=0)
+    phase_duration_us_max: float = Field(gt=0)
+    phase_duration_us_step: float = Field(gt=0)
+    pulses_per_burst_max: int = Field(gt=0)
+    interpulse_interval_ms_max: float = Field(gt=0)
+    bursts_max: int = Field(gt=0)
+    interburst_interval_seconds_min: float = Field(ge=0)
+    interburst_interval_seconds_max: float = Field(gt=0)
+    simultaneous_stimulation_channels: int = Field(gt=0)
+    charge_injection_capacity_documented: bool
+
+    @model_validator(mode="after")
+    def _charge_capacity_is_not_claimed(self) -> DocumentedDeviceLimits:
+        if self.charge_injection_capacity_documented:
+            raise ValueError(
+                "charge_injection_capacity_documented must stay false until MaxWell's "
+                "Electrical Stimulation Guide has been obtained and read"
+            )
+        return self
 
 
 class WaveformSection(Strict):
     type: Literal["biphasic"]
     charge_balanced: bool
-    phase_order: Literal["cathodic_then_anodic", "anodic_then_cathodic"]
+    # Voltage sign, matching how the manual describes the pulse. The mapping to
+    # anodic/cathodic depends on voltage_amplifier_inverts_polarity, which is
+    # not verified, so it is deliberately not encoded here.
+    phase_order: Literal["positive_then_negative", "negative_then_positive"]
     phase_duration_samples: int | None = Field(default=None, gt=0)
     inter_phase_interval_samples: int = Field(ge=0)
     pulses_per_train: int | None = Field(default=None, gt=0)
@@ -501,9 +572,71 @@ class RoutingSection(Strict):
 class StimulationProtocols(Strict):
     schema_version: int
     hardware: HardwareSection
+    documented_device_limits: DocumentedDeviceLimits
     stimulation: StimulationSection
     recording: RecordingSection
     routing: RoutingSection
+
+    @model_validator(mode="after")
+    def _configured_limits_respect_the_documented_ones(self) -> StimulationProtocols:
+        """The experiment may be stricter than the device, never looser."""
+        documented = self.documented_device_limits
+        limits = self.stimulation.hard_limits
+        waveform = self.stimulation.waveform
+        problems: list[str] = []
+
+        ceiling = documented.recommended_maximum_amplitude_mV
+        if limits.maximum_absolute_amplitude_mV is not None:
+            if limits.maximum_absolute_amplitude_mV > ceiling:
+                problems.append(
+                    f"maximum_absolute_amplitude_mV {limits.maximum_absolute_amplitude_mV} mV "
+                    f"exceeds the vendor-recommended maximum {ceiling} mV; exceeding it may "
+                    "compromise electrode integrity"
+                )
+            if limits.maximum_absolute_amplitude_mV < documented.minimum_assay_amplitude_mV:
+                problems.append(
+                    f"maximum_absolute_amplitude_mV {limits.maximum_absolute_amplitude_mV} mV "
+                    f"is below the minimum the assay accepts "
+                    f"({documented.minimum_assay_amplitude_mV} mV)"
+                )
+
+        # The manual expresses pulse timing in microseconds; the protocol is in
+        # samples. Convert with the documented MaxOne sampling frequency.
+        us_per_sample = 1_000_000 / self.hardware.sampling_frequency_hz
+        if waveform.phase_duration_samples is not None:
+            phase_us = waveform.phase_duration_samples * us_per_sample
+            if not (documented.phase_duration_us_min <= phase_us <= documented.phase_duration_us_max):
+                problems.append(
+                    f"phase_duration_samples {waveform.phase_duration_samples} is {phase_us:g} us, "
+                    f"outside the documented range "
+                    f"[{documented.phase_duration_us_min}, {documented.phase_duration_us_max}] us"
+                )
+
+        if (
+            waveform.pulses_per_train is not None
+            and waveform.pulses_per_train > documented.pulses_per_burst_max
+        ):
+            problems.append(
+                f"pulses_per_train {waveform.pulses_per_train} exceeds the documented maximum "
+                f"{documented.pulses_per_burst_max}"
+            )
+
+        if waveform.trains_per_cycle > documented.bursts_max:
+            problems.append(
+                f"trains_per_cycle {waveform.trains_per_cycle} exceeds the documented maximum "
+                f"{documented.bursts_max}"
+            )
+
+        if len(self.stimulation.stimulation_electrodes) > documented.simultaneous_stimulation_channels:
+            problems.append(
+                f"{len(self.stimulation.stimulation_electrodes)} stimulation electrodes exceed the "
+                f"{documented.simultaneous_stimulation_channels} simultaneously connectable "
+                "stimulation channels"
+            )
+
+        if problems:
+            raise ValueError("; ".join(problems))
+        return self
 
 
 # ---------------------------------------------------------------------------

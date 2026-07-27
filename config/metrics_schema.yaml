@@ -157,11 +157,20 @@ quality_control:
   minimum_active_electrodes: null
 
   # Electrode count is derived as active_area_percent / 100 * denominator.
-  # The denominator is NOT stated in the workbook. P005211 (0.10 %, one active
-  # electrode) back-calculates to ~1000, consistent with 1024 simultaneously
-  # recorded channels, but that is an inference. Setting minimum_active_electrodes
-  # without setting this is a configuration error.
+  #
+  # MaxLab Live Manual v25.1 defines Active Area as "the percentage of active
+  # electrodes with respect to the total number of recorded electrodes", and
+  # caps a single configuration at 1020 routed electrodes. The routed count is
+  # per recording and is NOT exported in the workbook, so it must be set here
+  # from the assay that produced the recording -- 1020 only if the full routing
+  # was used. Setting minimum_active_electrodes without setting this is a
+  # configuration error.
+  #
+  # (In the reference export, a denominator of 1020 reproduces near-integer
+  # active-electrode counts for six of the seven recordings, and gives exactly
+  # one active electrode for P005211 -- consistent with its "N/A" dispersion.)
   active_area_denominator_electrodes: null
+  maximum_routed_electrodes: 1020
 
   # A present mean with a missing dispersion statistic indicates a single
   # contributing electrode. Treat it as a QC failure, not as missing data.
@@ -190,8 +199,11 @@ known_quirks:
     use_as_metadata_source: false
     # A recording with zero bursts still emits placeholder rows.
     emits_placeholder_rows_when_no_bursts: true
-    # Spikes per Burst / Spikes per Burst per Electrode implies a per-well
-    # constant (~166.7, ~248.5, ~190.0) whose definition is undocumented.
-    per_electrode_denominator_documented: false
+    # The manual defines Spikes per Burst per Electrode as "normalized by the
+    # total number of recorded electrodes", but in the reference export the
+    # implied divisor is ~166.8 / ~247.8 / ~190.2 rather than the ~1020 that
+    # Active Area implies for the same recordings. The documented definition
+    # does not reproduce the data, so the field stays off the decision path.
+    per_electrode_denominator_reproduces_documentation: false
 
   read_columns_by_header_name_only: true

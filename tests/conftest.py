@@ -89,12 +89,14 @@ def runnable_config(config_factory, tmp_path: Path):
             "metrics_schema.expected_acquisition.duration_seconds_max": 310.0,
             "metrics_schema.quality_control.minimum_active_area_percent": 0.2,
             "metrics_schema.quality_control.minimum_active_electrodes": 3,
-            "metrics_schema.quality_control.active_area_denominator_electrodes": 1024,
+            "metrics_schema.quality_control.active_area_denominator_electrodes": 1020,
             "stimulation_protocols.stimulation.stimulation_electrodes": [1000, 1001],
             "stimulation_protocols.stimulation.waveform.phase_duration_samples": 4,
             "stimulation_protocols.stimulation.waveform.pulses_per_train": 10,
             "stimulation_protocols.stimulation.waveform.inter_pulse_interval_samples": 200,
-            "stimulation_protocols.stimulation.hard_limits.maximum_absolute_amplitude_mV": 800.0,
+            # 600 mV is the vendor-recommended ceiling for MaxOne+ PEDOT electrodes;
+            # the configured protocol limit may not exceed it.
+            "stimulation_protocols.stimulation.hard_limits.maximum_absolute_amplitude_mV": 600.0,
             "stimulation_protocols.stimulation.hard_limits.maximum_cumulative_stimulations": 50,
             "stimulation_protocols.hardware.maxlab_live_version": "TEST",
             "stimulation_protocols.hardware.api_version": "TEST",

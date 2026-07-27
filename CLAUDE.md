@@ -87,21 +87,52 @@ Read these files before implementing or changing behavior:
 - `config/metrics_schema.yaml`: workbook interpretation, recording selection, and the metric to read
 - `config/stimulation_protocols.yaml`: waveform, electrodes, amplitude step, and hard limits
 - `metrics_data_20260409_150425.xlsx`: the reference metrics export
+- **MaxLab Live Manual v25.1** (`mxw-maxlab-live-manual-v25.1.pdf`): the vendor GUI manual. It defines the exported metrics (§9.1.2, §9.2.3), the `Instance` key and Meta Data fields (§8.3.4), and the stimulation parameter ranges (§4 Sidebar, §7.3). It contains **no** Python API documentation.
 - local MaxLab examples under the installed MaxLab directory
 - the vendor API documentation matching the installed MaxLab/API versions
 - tests and recorded fixtures
 
 Do not infer undocumented API behavior, workbook semantics, biological thresholds, electrode IDs, or safe stimulation limits.
 
-### 4.1 Known-unknown list
+### 4.1 Definitions confirmed by the vendor manual
 
-These are unresolved. Do not guess a value or a definition for any of them.
+Quote the manual, do not re-derive these.
 
-- The electrode denominator behind `Network - Burst Level.Spikes per Burst per Electrode`. Dividing `Spikes per Burst` by it yields a per-well constant of ~166.7 (`P005157`), ~248.5 (`P005169`), and ~190.0 (`P005190`). It matches neither a fixed array size nor the electrode count implied by `Active Area [%]`. Requires vendor documentation.
-- The exact denominator of `Active Area [%]`. `P005211` shows `0.10 %` with a single active electrode, which back-calculates to ~1000 electrodes and is consistent with 1024 simultaneously recorded channels, but this is an inference and is not stated in the file.
-- `DIV [days]` is `"N/A"` for every record in the reference file.
+- **`Active Area [%]`** — "Percentage of active electrodes with respect to the total number of recorded electrodes." An electrode counts as active when its firing rate exceeds the `Firing Rate Threshold [Hz]` **and** its 90th-percentile spike amplitude exceeds the `Amplitude Threshold [µV]`; both are the Activity Analysis parameters recorded in the workbook (`0.1 Hz` / `20 µV` in the reference export).
+- **The denominator is per recording**: the number of electrodes routed for that recording, **at most 1020** in a single configuration. It is *not* exported in the metrics workbook, so it must be configured from the assay that produced the recording. (`1024` appears in the manual only as the 10-bit ADC resolution behind `LSB [µV]`; it is not an electrode count.)
+- **Firing Rate summary metrics** — "Only active electrodes are considered." The mean is over active electrodes, never over all recorded electrodes.
+- **`Instance`** — "For each unique combination (Well Plate ID + Well Number + Assay Run ID + Analysis Trial), a unique Instance index is assigned." Parity is not part of the definition.
+- **`Number of Configurations`** — "Number of configurations in a single recording file (for example, 7 configurations for a 7X Sparse ActivityScan Assay)." A Network assay is `1`. When it is greater than `1`, `Duration per Configuration [s]` is per configuration and not the total recording time.
+- **`Well Number`** — "always 1 for the MaxOne System."
+- **`DIV [days]`** — automatically calculated from the plating date entered in the Well Editor. `"N/A"` means no plating date was entered; it is not an error.
+- **Stimulation** — 32 stimulation channels may be connected simultaneously; pulses are voltage, biphasic, **positive phase first**. See §4.3.
+
+### 4.2 Still unresolved
+
+Do not guess a value or a definition for any of them.
+
+- **The vendor Python API.** The manual documents the GUI only. The `maxlab` module, `mxwserver`, DAC codes, and the volts-to-bits calibration remain undocumented here. This is what blocks `adapters/real.py`.
+- **Charge injection capacity and the safe-amplitude rationale.** The manual defers to MaxWell's separate *Electrical Stimulation Guide* (`mxw.bio/MxW_Doc_Electrical_Stimulation_Guide`), which is behind an authenticated file share and has not been obtained.
+- **`Spikes per Burst per Electrode`.** The manual says "normalized by the total number of recorded electrodes", but in the reference export `Spikes per Burst` divided by it yields ~166.8 (`P005157`), ~247.8 (`P005169`), and ~190.2 (`P005190`) — not the ~1020 that `Active Area [%]` implies for the same recordings. The stated definition does not reproduce the data. This field is not on the decision path; do not use it.
 - Whether an adaptive run produces one new workbook per cycle, or appends recordings to an existing workbook. Both must be tolerated; see §8.
-- The semantics of `Number of Configurations > 1`. It is `1` throughout the reference file. Any other value must fail closed.
+
+### 4.3 Documented stimulation limits
+
+From the manual. These are device and vendor-recommendation limits; the experiment's own limits are separate and must still be set explicitly.
+
+| Parameter | Range | Default |
+| --- | --- | --- |
+| Stimulation Amplitude | `0`–`1000` mV (assay setup: `3`–`1000`) | `0` (Sidebar), `200` (assay) |
+| Stimulation Pulse Phase | `100`–`1000` µs, step `50` | `200` |
+| Number of Pulses per Burst | `0`–`10000` | `1` |
+| Interpulse Interval | `0`–`10000` ms | `300` |
+| Number of Bursts | `0`–`99` | `1` |
+| Interburst Interval | `0.01`–`600` s | `1.00` |
+| Simultaneous stimulation channels | `32` | — |
+
+> "For MaxOne+ Chips with PEDOT electrodes, the recommended maximum Stimulation Amplitude is **600 mV**. Exceeding this value may compromise electrode integrity and experiment reproducibility."
+
+Treat 600 mV as a hard ceiling unless the Electrical Stimulation Guide is obtained and an operator explicitly authorises more. The configured `maximum_absolute_amplitude_mV` must never exceed it.
 
 ## 5. Non-negotiable safety rules
 
@@ -244,7 +275,7 @@ Reject the recording, and therefore block stimulation, when any of these hold:
 
 - the resolved `Mean Firing Rate [Hz]` is missing, `"N/A"`, non-numeric, negative, or non-finite
 - `Active Area [%]` is missing or below `minimum_active_area_percent`
-- the number of contributing electrodes is below `minimum_active_electrodes`
+- the number of contributing electrodes is below `minimum_active_electrodes`, derived as `Active Area [%] / 100 * routed_electrode_count` (§4.1: the routed count is not in the workbook and must be configured)
 - `Duration per Configuration [s]` is missing, or outside the configured expected range
 - `Number of Configurations` is not `1`
 - `Sampling Frequency [Hz]`, `Gain`, or `LSB [µV]` differ from the configured expected values
@@ -267,7 +298,7 @@ Read exactly one scalar:
 
 That value is `mean_firing_frequency_hz`, in Hz.
 
-`Mean Firing Rate [Hz]` is the mean over electrodes that passed the Activity Analysis detection thresholds — in the reference file, firing rate >= `0.1 Hz` and amplitude >= `20 µV`. It is **not** a mean over all recorded electrodes. The denominator therefore changes with culture activity, which is why `Active Area [%]` must be read and QC-checked alongside it (§8.4).
+`Mean Firing Rate [Hz]` is the mean over *active* electrodes only — the manual is explicit: "Only active electrodes are considered." An electrode is active when its firing rate exceeds `Firing Rate Threshold [Hz]` and its 90th-percentile spike amplitude exceeds `Amplitude Threshold [µV]` (`0.1 Hz` / `20 µV` in the reference file). It is **not** a mean over all recorded electrodes. The denominator therefore changes with culture activity, which is why `Active Area [%]` must be read and QC-checked alongside it (§8.4).
 
 Do not substitute `Median Firing Rate [Hz]`, any percentile column, or any `Network - Well Level` metric unless the policy is explicitly revised and tested. Do not compute a firing rate from `Network - Burst Level`.
 
