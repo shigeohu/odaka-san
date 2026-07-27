@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "maxone-loop"
+version = "0.1.0"
+description = "Deterministic metrics-mediated adaptive stimulation loop for MaxWell Biosystems MaxOne"
+requires-python = ">=3.11"
+dependencies = [
+    "openpyxl>=3.1",
+    "pydantic>=2.6",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+include = ["maxone_loop*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Hardware-in-the-loop tests are opt-in and never run by default.
+addopts = "-m 'not hardware'"
+markers = [
+    "hardware: requires a physical MaxOne. Never enabled in CI or from Claude Code.",
+]

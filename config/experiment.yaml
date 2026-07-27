@@ -83,10 +83,14 @@ required_before_armed:
   - metrics_schema.expected_acquisition.duration_seconds_max
   - metrics_schema.quality_control.minimum_active_area_percent
   - metrics_schema.quality_control.minimum_active_electrodes
+  - metrics_schema.quality_control.active_area_denominator_electrodes
   - stimulation.protocol_id
   - stimulation.stimulation_electrodes
-  - stimulation.waveform
-  - stimulation.maximum_cumulative_stimulations
+  - stimulation.waveform.phase_duration_samples
+  - stimulation.waveform.pulses_per_train
+  - stimulation.waveform.inter_pulse_interval_samples
+  - stimulation.hard_limits.maximum_absolute_amplitude_mV
+  - stimulation.hard_limits.maximum_cumulative_stimulations
   - hardware.maxlab_live_version
   - hardware.api_version
   - hardware.emergency_stop_procedure

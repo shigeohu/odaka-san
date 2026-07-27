@@ -90,6 +90,51 @@ Skill は、後に「新しい metrics 形式を取り込む」「dry-run 解析
 - 適応ループで1サイクルごとに新規 workbook が出るのか、既存 workbook に追記されるのか。現状はどちらも許容する設計にしてある。
 - `Number of Configurations > 1` の意味。参照ファイルでは全て `1`。それ以外は fail closed。
 
+## 実装
+
+`maxone_loop` パッケージとして実装済み。実機アダプタ以外は完成している。
+
+```bash
+pip install -e ".[dev]"
+
+python -m pytest
+python -m maxone_loop.cli validate-config --config config/experiment.yaml
+python -m maxone_loop.cli inspect --config config/experiment.yaml metrics_data_20260409_150425.xlsx
+python -m maxone_loop.cli replay --config config/experiment.yaml --input tests/fixtures
+python -m maxone_loop.cli run --config config/experiment.yaml --mode dry_run
+```
+
+`validate-config` と `inspect` はそのまま動く。`replay` と `run` は上記の `null` を埋めるまで意図的に非ゼロ終了する（`recording_selection.strategy` と `paths.metrics_watch_directory` が未設定のため）。推測しないことが設計上の正しい挙動である。
+
+### モジュール構成
+
+| モジュール | 役割 |
+|---|---|
+| `config/models.py` | 型付き設定。未知キーはエラー |
+| `config/loader.py` | 3ファイル読み込み、`*.local.yaml` 上書き、ハッシュ |
+| `metrics/workbook.py` | read-only workbook reader（`"N/A"`、ヘッダ名解決、無名index列） |
+| `metrics/selection.py` | レコーディングを1件だけ特定 |
+| `metrics/extract.py` | スカラー1個の取得と来歴記録 |
+| `metrics/qc.py` | 品質ゲート（単一電極ケースを含む） |
+| `policy.py` | 純粋な判定関数（I/O・時計・ハードウェアなし） |
+| `state.py` | 状態機械と再起動時の解決 |
+| `ledger.py` | SQLite 来歴、レコーディング冪等性、装置 lock |
+| `watcher.py` | 安定ファイル検出 |
+| `adapters/` | simulated / dry_run / real |
+| `orchestrator.py` | サイクル制御 |
+| `synthetic.py` | 合成 workbook（simulate モードとテスト用） |
+| `cli.py` | `validate-config` / `inspect` / `replay` / `run` |
+
+### 実機アダプタは未実装
+
+`adapters/real.py` は意図的に未実装である。MaxLab Live の実体（`maxlab` パッケージ、ローカルの example、インストール版に対応した API ドキュメント）が本リポジトリに存在せず、CLAUDE.md §4 が未文書化の API 挙動の推測を禁じているため。各メソッドは `AdapterError` を送出する。ただし `safe_shutdown` は例外処理中に呼ばれるため決して raise しない。
+
+実装契約は `IMPLEMENTATION_CONTRACT` として同ファイルにデータで保持してある。取得マシン上で、インストール済み MaxLab のバージョンに対して実装し、armed 実行前にレビューすること。
+
+### 冪等性の境界
+
+workbook のハッシュではなく **レコーディング識別子**（`Meta Data.Folder Path`）が境界である。`consumed_recordings` テーブルの主キーが `(experiment_id, folder_path)` で、orchestrator は**刺激の前に**識別子を確保する。確保と書き込みの間でクラッシュした場合、1サイクルを失うが、刺激を繰り返すことは起きない。
+
 ## 配置と開始
 
 このリポジトリの root で Claude Code を起動する。
@@ -97,15 +142,6 @@ Skill は、後に「新しい metrics 形式を取り込む」「dry-run 解析
 ```bash
 cd odaka-san
 claude
-```
-
-最初の依頼例：
-
-```text
-CLAUDE.md と config を読み、metrics_data_20260409_150425.xlsx を
-tests/fixtures に配置した上で、workbook reader と recording selection の
-実装案を提示してください。実装は dry_run 限定とし、
-未解決点と必要な fixture テストを明示してください。
 ```
 
 ## 重要

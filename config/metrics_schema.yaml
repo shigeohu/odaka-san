@@ -156,6 +156,13 @@ quality_control:
   minimum_active_area_percent: null
   minimum_active_electrodes: null
 
+  # Electrode count is derived as active_area_percent / 100 * denominator.
+  # The denominator is NOT stated in the workbook. P005211 (0.10 %, one active
+  # electrode) back-calculates to ~1000, consistent with 1024 simultaneously
+  # recorded channels, but that is an inference. Setting minimum_active_electrodes
+  # without setting this is a configuration error.
+  active_area_denominator_electrodes: null
+
   # A present mean with a missing dispersion statistic indicates a single
   # contributing electrode. Treat it as a QC failure, not as missing data.
   fail_when_dispersion_missing: true

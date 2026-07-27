@@ -9,3 +9,6 @@ __pycache__/
 
 # Excel lock/temporary artefacts in the metrics watch directory
 ~$*.xlsx
+*.egg-info/
+build/
+dist/

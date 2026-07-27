@@ -414,9 +414,15 @@ Before any hardware review, run:
 ```bash
 python -m pytest
 python -m maxone_loop.cli validate-config --config config/experiment.yaml
+python -m maxone_loop.cli inspect --config config/experiment.yaml <workbook.xlsx>
 python -m maxone_loop.cli replay --config config/experiment.yaml --input tests/fixtures
 python -m maxone_loop.cli run --config config/experiment.yaml --mode dry_run
 ```
+
+With the tracked configuration, `replay` and `run` exit non-zero on purpose:
+`recording_selection.strategy` and `paths.metrics_watch_directory` are still
+null, and refusing to guess is the designed behaviour. They exit zero once
+those values are set. `validate-config` and `inspect` work as-is.
 
 Test at minimum:
 
@@ -470,7 +476,38 @@ Runtime:
 
 Unit and CI tests must mock the vendor API. Hardware-in-the-loop tests must be separate, explicit, and disabled by default.
 
-## 15. Claude Code workflow
+## 15. Repository layout
+
+```text
+maxone_loop/
+  config/models.py      typed configuration; unknown keys are errors
+  config/loader.py      three-file load, *.local.yaml overrides, hashes
+  metrics/workbook.py   read-only workbook reader; "N/A", headers, quirks
+  metrics/selection.py  exactly-one recording selection
+  metrics/extract.py    the one scalar, plus its provenance record
+  metrics/qc.py         quality gates, including the single-electrode case
+  policy.py             pure decision function
+  state.py              state machine and restart resolution
+  ledger.py             SQLite provenance, recording idempotency, device lock
+  watcher.py            stable-file detection
+  adapters/             simulated / dry_run / real (real is a fail-closed stub)
+  orchestrator.py       cycle sequencing
+  synthetic.py          synthetic workbooks for simulate mode and tests
+  cli.py                validate-config, inspect, replay, run
+```
+
+`adapters/real.py` is deliberately unimplemented. It requires the installed
+MaxLab Live distribution and its API documentation; every method raises rather
+than guessing at vendor behaviour. `safe_shutdown` is the exception -- it must
+never raise, because it runs during cleanup.
+
+The provenance and idempotency boundary is the **recording identity**, not the
+workbook hash: `consumed_recordings` has a primary key on
+`(experiment_id, folder_path)`, and the orchestrator claims the identity
+*before* stimulating. A crash between the claim and the write costs a cycle; it
+never repeats one.
+
+## 16. Claude Code workflow
 
 For each task:
 
@@ -488,7 +525,7 @@ For each task:
 
 If a required value is unknown, retain `null`, produce a clear validation error, and keep the project in `dry_run`.
 
-## 16. Initial implementation order
+## 17. Initial implementation order
 
 1. Inspect representative metrics workbooks.
 2. Finalize `config/metrics_schema.yaml`.
