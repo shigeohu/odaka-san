@@ -143,18 +143,98 @@ def test_durations_are_not_exactly_300(reference_workbook, runnable_config):
     assert min(durations) >= 300.0 and max(durations) <= 301.0
 
 
-def test_missing_sheet_is_rejected(tmp_path, runnable_config):
+@pytest.mark.parametrize("sheet", ["Meta Data", "Analysis Parameters", "Activity - Well Level"])
+def test_missing_required_sheet_is_rejected(tmp_path, runnable_config, sheet):
     schema = runnable_config().metrics_schema
     path = write_workbook(
-        tmp_path / "metrics_data_20260101_000000.xlsx",
+        tmp_path / f"metrics_data_20260101_0000{abs(hash(sheet)) % 100:02d}.xlsx",
+        [SyntheticRecording("P1", "000001", 0.5)],
+    )
+    book = load_workbook(path)
+    del book[sheet]
+    book.save(path)
+
+    with pytest.raises(WorkbookError) as exc:
+        MetricsWorkbook(path, schema)
+    assert exc.value.reason_code == SHEET_SET_MISMATCH
+    assert "required" in exc.value.message
+
+
+def test_summary_metrics_export_is_accepted(tmp_path, runnable_config):
+    """"Export summary metrics" omits the burst-level sheet.
+
+    The decision path never reads it, so a summary export must still work --
+    requiring it would make a correct export unreadable. See CLAUDE.md section 3.
+    """
+    config = runnable_config(
+        **{
+            "metrics_schema.recording_selection.strategy": "folder_path_prefix",
+            "metrics_schema.recording_selection.folder_path": "/home/mxwbio/Data/Synthetic/",
+        }
+    )
+    path = write_workbook(
+        tmp_path / "metrics_data_20260101_000010.xlsx",
         [SyntheticRecording("P1", "000001", 0.5)],
     )
     book = load_workbook(path)
     del book["Network - Burst Level"]
     book.save(path)
 
+    workbook = MetricsWorkbook(path, config.metrics_schema)
+    assert workbook.has_sheet("network_burst_level") is False
+    assert workbook.has_sheet("activity_well_level") is True
+    assert len(workbook.recordings()) == 1
+
+    # And the metric is still readable end to end.
+    from maxone_loop.metrics.extract import extract
+    from maxone_loop.metrics.selection import select_recording
+
+    selection = select_recording(workbook, config.metrics_schema)
+    result = extract(workbook, config.metrics_schema, selection, workbook_sha256="0" * 64)
+    assert result.mean_firing_frequency_hz == 0.5
+
+
+def test_activity_only_export_is_accepted(tmp_path, runnable_config):
+    """A Network Assay analysed with Activity Analysis alone has no Network sheets."""
+    config = runnable_config(
+        **{
+            "metrics_schema.recording_selection.strategy": "folder_path_prefix",
+            "metrics_schema.recording_selection.folder_path": "/home/mxwbio/Data/Synthetic/",
+        }
+    )
+    path = write_workbook(
+        tmp_path / "metrics_data_20260101_000011.xlsx",
+        [SyntheticRecording("P1", "000001", 0.5)],
+    )
+    book = load_workbook(path)
+    del book["Network - Burst Level"]
+    del book["Network - Well Level"]
+    book.save(path)
+
+    workbook = MetricsWorkbook(path, config.metrics_schema)
+    assert workbook.present_sheets == (
+        "activity_well_level",
+        "analysis_parameters",
+        "meta_data",
+    )
+    assert len(workbook.recordings()) == 1
+
+
+def test_reading_an_absent_optional_sheet_raises_rather_than_returning_empty(
+    tmp_path, runnable_config
+):
+    schema = runnable_config().metrics_schema
+    path = write_workbook(
+        tmp_path / "metrics_data_20260101_000012.xlsx",
+        [SyntheticRecording("P1", "000001", 0.5)],
+    )
+    book = load_workbook(path)
+    del book["Network - Burst Level"]
+    book.save(path)
+
+    workbook = MetricsWorkbook(path, schema)
     with pytest.raises(WorkbookError) as exc:
-        MetricsWorkbook(path, schema)
+        workbook.sheet("network_burst_level")
     assert exc.value.reason_code == SHEET_SET_MISMATCH
 
 

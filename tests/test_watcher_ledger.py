@@ -233,3 +233,57 @@ def test_illegal_transition_raises():
 def test_baseline_cannot_reach_stimulating_directly():
     """Cycle 0 must pass through the metrics wait before anything is applied."""
     assert not can_transition(State.BASELINE_RECORDING, State.STIMULATING)
+
+
+# --- exports arrive in their own subfolder ---------------------------------
+
+
+def test_workbook_in_an_export_subfolder_is_found(watch_dir, runnable_config, reference_workbook):
+    """MaxLab Live saves each export into a folder named with the export time."""
+    config = runnable_config()
+    clock = FakeClock()
+    watcher = MetricsWatcher(watch_dir, config.experiment.metrics_watcher, clock=clock)
+
+    export = watch_dir / "20260409_150425"
+    export.mkdir()
+    destination = export / reference_workbook.name
+    shutil.copy(reference_workbook, destination)
+
+    watcher.poll()
+    clock.advance(60)
+    assert watcher.poll() == [destination]
+
+
+def test_non_recursive_watching_ignores_subfolders(watch_dir, runnable_config, reference_workbook):
+    config = runnable_config(**{"experiment.metrics_watcher.recursive": False})
+    export = watch_dir / "20260409_150425"
+    export.mkdir()
+    shutil.copy(reference_workbook, export / reference_workbook.name)
+
+    assert list_candidates(watch_dir, config.experiment.metrics_watcher) == []
+
+
+def test_hidden_export_folder_is_ignored(watch_dir, runnable_config, reference_workbook):
+    """An export still being written can sit under a temporary directory."""
+    config = runnable_config()
+    for folder in (".in_progress", "~$tmp", "_partial"):
+        staging = watch_dir / folder
+        staging.mkdir()
+        shutil.copy(reference_workbook, staging / reference_workbook.name)
+
+    assert list_candidates(watch_dir, config.experiment.metrics_watcher) == []
+
+
+def test_several_exports_are_all_discovered(watch_dir, runnable_config, reference_workbook):
+    config = runnable_config()
+    clock = FakeClock()
+    watcher = MetricsWatcher(watch_dir, config.experiment.metrics_watcher, clock=clock)
+
+    for stamp in ("20260409_150425", "20260409_161500"):
+        export = watch_dir / stamp
+        export.mkdir()
+        shutil.copy(reference_workbook, export / f"metrics_data_{stamp}.xlsx")
+
+    watcher.poll()
+    clock.advance(60)
+    assert len(watcher.poll()) == 2

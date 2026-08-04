@@ -57,6 +57,7 @@ class PathsSection(Strict):
 
 class MetricsWatcherSection(Strict):
     filename_glob: str
+    recursive: bool
     poll_interval_seconds: float = Field(gt=0)
     stable_for_seconds: float = Field(ge=0)
     metrics_timeout_minutes: float = Field(gt=0)
@@ -167,10 +168,55 @@ class SheetsSection(Strict):
     activity_well_level: str
     network_well_level: str
     network_burst_level: str
-    require_exact_sheet_set: bool
+    required: tuple[str, ...]
+    optional: tuple[str, ...]
+    reject_unknown_sheets: bool
+
+    _SHEET_KEYS = (
+        "meta_data",
+        "analysis_parameters",
+        "activity_well_level",
+        "network_well_level",
+        "network_burst_level",
+    )
 
     def names(self) -> dict[str, str]:
-        return {k: v for k, v in self if k != "require_exact_sheet_set"}
+        return {key: getattr(self, key) for key in self._SHEET_KEYS}
+
+    def required_names(self) -> dict[str, str]:
+        return {key: getattr(self, key) for key in self.required}
+
+    def optional_names(self) -> dict[str, str]:
+        return {key: getattr(self, key) for key in self.optional}
+
+    @model_validator(mode="after")
+    def _partition_is_complete(self) -> SheetsSection:
+        known = set(self._SHEET_KEYS)
+        required, optional = set(self.required), set(self.optional)
+
+        unknown = (required | optional) - known
+        if unknown:
+            raise ValueError(f"unknown sheet key(s) in required/optional: {sorted(unknown)}")
+        if required & optional:
+            raise ValueError(
+                f"sheet(s) listed as both required and optional: {sorted(required & optional)}"
+            )
+        if required | optional != known:
+            raise ValueError(
+                "every sheet must be classified as required or optional; missing: "
+                f"{sorted(known - (required | optional))}"
+            )
+
+        # The decision path reads the metric from Activity - Well Level and its
+        # metadata from Meta Data joined through Analysis Parameters. Those three
+        # cannot be optional.
+        essential = {"meta_data", "analysis_parameters", "activity_well_level"}
+        if not essential <= required:
+            raise ValueError(
+                "these sheets carry the decision path and must stay required: "
+                f"{sorted(essential - required)}"
+            )
+        return self
 
 
 class InstanceJoinSection(Strict):

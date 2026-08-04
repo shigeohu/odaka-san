@@ -35,8 +35,22 @@ def list_candidates(directory: Path, watcher: MetricsWatcherSection) -> list[Can
     if not directory.is_dir():
         return []
     found: list[Candidate] = []
-    for path in sorted(directory.glob(watcher.filename_glob)):
+    # An export lands in its own timestamped subfolder, so the default is to
+    # search the tree. See CLAUDE.md section 3.
+    matches = (
+        directory.rglob(watcher.filename_glob)
+        if watcher.recursive
+        else directory.glob(watcher.filename_glob)
+    )
+    for path in sorted(matches):
         if not path.is_file() or _is_ignored(path.name, watcher.ignore_filename_prefixes):
+            continue
+        # A hidden or temporary *directory* anywhere above the file disqualifies
+        # it too -- an export still being written can sit under one.
+        if any(
+            _is_ignored(part, watcher.ignore_filename_prefixes)
+            for part in path.relative_to(directory).parts[:-1]
+        ):
             continue
         try:
             stat = path.stat()

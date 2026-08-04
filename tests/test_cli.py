@@ -153,3 +153,62 @@ def test_run_without_a_watch_directory_is_an_error(capsys):
     )
     assert code == 2
     assert "metrics_watch_directory is null" in capsys.readouterr().err
+
+
+def test_replay_descends_into_export_subfolders(capsys, config_dir, tmp_path, reference_workbook):
+    """Exports land in a timestamped subfolder, so a flat glob would miss them."""
+    directory = config_dir()
+    root = tmp_path / "exports"
+    export = root / "20260409_150425"
+    export.mkdir(parents=True)
+    shutil.copy(reference_workbook, export / reference_workbook.name)
+
+    code = main(["replay", "--config", str(directory), "--input", str(root)])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "P005157" in out
+
+
+def test_inspect_reports_absent_optional_sheets(capsys, config_dir, tmp_path, reference_workbook):
+    from openpyxl import load_workbook
+
+    directory = config_dir()
+    path = tmp_path / reference_workbook.name
+    shutil.copy(reference_workbook, path)
+    book = load_workbook(path)
+    del book["Network - Burst Level"]
+    book.save(path)
+
+    code = main(["inspect", "--config", str(directory), str(path)])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "optional sheet(s) not in this export" in out
+    assert "network_burst_level" in out
+    assert "7 recording(s)" in out
+
+
+def test_inspect_warns_when_activity_analysis_is_missing(capsys, config_dir, tmp_path):
+    """Running only Network Analysis leaves no metric to read."""
+    from openpyxl import load_workbook
+
+    from maxone_loop.synthetic import SyntheticRecording, write_workbook
+
+    directory = config_dir()
+    path = write_workbook(
+        tmp_path / "metrics_data_20260101_000000.xlsx",
+        [SyntheticRecording("P1", "000001", 0.5)],
+    )
+    book = load_workbook(path)
+    for row in book["Analysis Parameters"].iter_rows(min_row=2):
+        if row[1].value == "Activity Analysis":
+            row[1].value = "ISI-N Burst Detector"
+    book.save(path)
+
+    code = main(["inspect", "--config", str(directory), str(path)])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "WARNING" in out
+    assert "Activity Analysis" in out

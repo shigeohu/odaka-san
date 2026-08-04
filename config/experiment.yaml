@@ -17,8 +17,18 @@ paths:
 
 metrics_watcher:
   filename_glob: "metrics_data_*.xlsx"
+
+  # MaxLab Live saves an export into "a folder labeled with the date and time at
+  # which the export was carried out" (Manual v25.1 section 8.3.4), so the
+  # workbook appears one level down rather than directly in the watch
+  # directory. Search the tree, not just the top level.
+  recursive: true
   poll_interval_seconds: 5
   stable_for_seconds: 15
+  # This waits on an operator running Analysis + Export in the MaxLab Live GUI
+  # (CLAUDE.md section 3), not on the instrument. Exporting all metrics from an
+  # active culture can itself take several minutes, so set this to the realistic
+  # human turnaround, not the analysis runtime.
   metrics_timeout_minutes: 10
   hash_algorithm: sha256
 

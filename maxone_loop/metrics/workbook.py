@@ -126,24 +126,34 @@ class MetricsWorkbook:
             ) from exc
 
         try:
-            declared = self.schema.sheets.names()
+            sheets = self.schema.sheets
             actual = set(workbook.sheetnames)
-            expected = set(declared.values())
+            required = sheets.required_names()
+            optional = sheets.optional_names()
 
-            if self.schema.sheets.require_exact_sheet_set and actual != expected:
-                raise WorkbookError(
-                    SHEET_SET_MISMATCH,
-                    f"{self.path.name}: expected sheets {sorted(expected)}, found {sorted(actual)}",
-                )
-            missing = expected - actual
+            missing = set(required.values()) - actual
             if missing:
                 raise WorkbookError(
                     SHEET_SET_MISMATCH,
-                    f"{self.path.name}: missing sheet(s) {sorted(missing)}",
+                    f"{self.path.name}: missing required sheet(s) {sorted(missing)}",
                 )
 
-            for key, name in declared.items():
-                self._sheets[key] = self._read_sheet(workbook[name], name)
+            # An unknown sheet means the export format changed under us.
+            if sheets.reject_unknown_sheets:
+                unknown = actual - set(required.values()) - set(optional.values())
+                if unknown:
+                    raise WorkbookError(
+                        SHEET_SET_MISMATCH,
+                        f"{self.path.name}: unexpected sheet(s) {sorted(unknown)}",
+                    )
+
+            # An absent optional sheet is a legitimate export choice, not a
+            # defect: "Export summary metrics" omits the burst-level sheet, and
+            # the Network sheets exist only when a Network Analysis trial was
+            # included. See CLAUDE.md section 3.
+            for key, name in {**required, **optional}.items():
+                if name in actual:
+                    self._sheets[key] = self._read_sheet(workbook[name], name)
         finally:
             workbook.close()
 
@@ -194,7 +204,21 @@ class MetricsWorkbook:
     # -- access -------------------------------------------------------------
 
     def sheet(self, key: str) -> Sheet:
-        return self._sheets[key]
+        """The sheet for ``key``. Raises if it was not present in the export."""
+        try:
+            return self._sheets[key]
+        except KeyError:
+            raise WorkbookError(
+                SHEET_SET_MISMATCH,
+                f"{self.path.name}: sheet {key!r} is not present in this export",
+            ) from None
+
+    def has_sheet(self, key: str) -> bool:
+        return key in self._sheets
+
+    @property
+    def present_sheets(self) -> tuple[str, ...]:
+        return tuple(sorted(self._sheets))
 
     # -- typed cell readers -------------------------------------------------
 

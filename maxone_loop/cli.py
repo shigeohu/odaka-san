@@ -40,6 +40,27 @@ def _load(args: argparse.Namespace) -> AppConfig:
     return config
 
 
+def _find_workbooks(directory: Path, config: AppConfig) -> list[Path]:
+    """Locate workbooks the same way the watcher would.
+
+    Exports land in their own timestamped subfolder (CLAUDE.md section 3.1), so
+    replaying a directory of real exports has to descend into it.
+    """
+    pattern = config.metrics_schema.file_format.filename_glob
+    matches = (
+        directory.rglob(pattern)
+        if config.experiment.metrics_watcher.recursive
+        else directory.glob(pattern)
+    )
+    prefixes = config.experiment.metrics_watcher.ignore_filename_prefixes
+    return sorted(
+        p
+        for p in matches
+        if p.is_file()
+        and not any(part.startswith(tuple(prefixes)) for part in p.relative_to(directory).parts)
+    )
+
+
 def cmd_validate_config(args: argparse.Namespace) -> int:
     try:
         config = _load(args)
@@ -89,7 +110,26 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     recordings = workbook.recordings()
     print(f"{path.name}  sha256={digest[:16]}  {len(recordings)} recording(s)")
     print("  note: the filename timestamp is the export time, not a recording time")
+
+    sheets = config.metrics_schema.sheets
+    absent = [k for k in sheets.optional if not workbook.has_sheet(k)]
+    if absent:
+        # Expected for a summary-metrics export, or when no Network Analysis
+        # trial was included. Reported so the operator can tell the difference
+        # between "exported less" and "exported wrong".
+        print(f"  optional sheet(s) not in this export: {', '.join(absent)}")
+
     activity_type = config.metrics_schema.instance_join.activity_analysis_type
+    without_activity = [
+        r.identity.wellplate_id
+        for r in recordings.values()
+        if len(r.instances.get(activity_type, ())) != 1
+    ]
+    if without_activity:
+        print(
+            f"  WARNING: {len(without_activity)} recording(s) do not have exactly one "
+            f"{activity_type!r} instance: {', '.join(sorted(without_activity))}"
+        )
 
     for folder_path, recording in recordings.items():
         instances = recording.instances.get(activity_type, ())
@@ -127,7 +167,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
         return 2
 
     directory = Path(args.input)
-    paths = sorted(directory.glob(config.metrics_schema.file_format.filename_glob))
+    paths = _find_workbooks(directory, config)
     if not paths:
         print(f"no workbooks matching the configured glob in {directory}", file=sys.stderr)
         return 2
@@ -170,7 +210,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     watcher = None
     if args.input:
         directory = Path(args.input)
-        workbooks = sorted(directory.glob(config.metrics_schema.file_format.filename_glob))
+        workbooks = _find_workbooks(directory, config)
     else:
         watch_directory = config.experiment.paths.metrics_watch_directory
         if watch_directory is None:

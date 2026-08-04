@@ -27,8 +27,26 @@ sheets:
   network_well_level: "Network - Well Level"
   network_burst_level: "Network - Burst Level"
 
-  # Fail closed when the workbook contains a sheet set other than the above.
-  require_exact_sheet_set: true
+  # Which sheets the export actually contains depends on the operator's export
+  # choices (see CLAUDE.md section 3):
+  #
+  #   "Export summary metrics"  -> well-level sheets only; no Burst Level sheet
+  #   "Export all metrics"      -> plus the per-burst / per-electrode sheets
+  #
+  # and the Network sheets exist at all only when a Network Analysis trial was
+  # included in the export. The decision path needs none of them, so requiring
+  # them would make a correct summary-metrics export unreadable.
+  required:
+    - meta_data
+    - analysis_parameters
+    - activity_well_level
+  optional:
+    - network_well_level
+    - network_burst_level
+
+  # A sheet that is neither required nor optional means the export format
+  # changed. Fail closed rather than guess.
+  reject_unknown_sheets: true
 
 # ---------------------------------------------------------------------------
 # Instance is the join key across every sheet.

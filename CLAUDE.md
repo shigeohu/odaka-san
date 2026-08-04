@@ -60,7 +60,7 @@ A recording is identified by `Meta Data.Folder Path`, which is unique per run, f
 
 **One exported workbook may contain many unrelated recordings.** The reference file contains seven different chips (`P005163`, `P005157`, `P005124`, `P005232`, `P005211`, `P005169`, `P005190`), each recorded for ~300 s. It is a batch export, not a time series of one chip.
 
-Selecting the wrong row silently applies another chip's firing rate to this experiment's stimulation decision. Recording selection is therefore a safety gate, not a convenience — see §8.3.
+Selecting the wrong row silently applies another chip's firing rate to this experiment's stimulation decision. Recording selection is therefore a safety gate, not a convenience — see §9.3.
 
 ### 2.5 Format quirks that must be handled explicitly
 
@@ -73,13 +73,66 @@ These are observed in the reference file and must be covered by fixture tests:
 5. **A recording with zero bursts still emits rows.** `P005163` has `Burst Frequency = 0` with every other burst metric `"N/A"`, and two placeholder rows in `Network - Burst Level` despite having no bursts. Row count in that sheet is not a burst count.
 6. **Recording duration is not exactly 300 s.** `Duration per Configuration [s]` ranges from `300.018` to `300.084` across the reference file. Always read the per-recording value; never hard-code 300.
 
-## 3. Role of Claude Code
+## 3. How the metrics workbook is produced
+
+**The workbook is not written automatically when a recording finishes.** A
+recording produces only the raw `.h5`. The workbook exists only after an
+operator runs an analysis on that recording and then exports it. Every cycle of
+the adaptive loop therefore contains a manual step, and the loop's
+`WAITING_FOR_METRICS` state is waiting on a person, not on the instrument.
+
+Per cycle, in MaxLab Live (Manual v25.1 §8 *Analysis Workflow*):
+
+1. Record the assay. This writes the raw `.h5` under the assay's folder.
+2. Open the **Analysis** tab and select that assay recording in the assay list.
+3. Select the analysis module. **The decision metric comes from `Activity Analysis`.** A Network Assay defaults to `Network Analysis`, so Activity Analysis must be chosen explicitly — the manual is clear that "an Activity Analysis can also be performed on a Network Assay". Running only Network Analysis produces no `Activity - Well Level` sheet and the cycle cannot proceed.
+4. Confirm the analysis parameters match `expected_analysis_parameters` (`0.1 Hz` / `20 µV` / `200 ms`). A mismatch is a QC failure (§9.4), not a warning.
+5. Click **Start Analysis** and wait for the trial's status icon to read *Completed*.
+6. Export:
+   - **Export Metrics** on the single trial, or
+   - toggle **Select for joint export** on each trial and click **Export Selected**.
+7. In the export dialog choose the save path, tick the `.xls` format, and choose either metric set (see §3.2).
+
+### 3.1 Where the file lands
+
+"The exported metrics will be saved in a folder labeled with the date and time
+at which the export was carried out." The workbook therefore appears **inside a
+new timestamped subdirectory** of the chosen save path, not directly in it.
+`metrics_watcher.recursive` must stay `true`, and
+`paths.metrics_watch_directory` must be the *parent* the operator exports into.
+
+Exporting `.xls` with all metrics from a highly active culture "may take
+several minutes", so the stable-file window is doing real work here.
+
+### 3.2 Which sheets exist depends on the export choice
+
+| Export choice | Sheets produced |
+| --- | --- |
+| Export summary metrics | well-level sheets only |
+| Export all metrics | plus electrode/spike-level and burst-level sheets |
+
+Only `Meta Data`, `Analysis Parameters`, and `Activity - Well Level` are on the
+decision path, so those are the only **required** sheets. The `Network - *`
+sheets are optional: they are absent from a summary-metrics export, and absent
+entirely when no Network Analysis trial was included. Requiring them would
+reject a perfectly good export. An *unknown* sheet is still a fault — that means
+the export format changed.
+
+### 3.3 Consequences the software must respect
+
+- **One recording can carry several Activity Analysis trials.** `Instance` is assigned per (Well Plate ID + Well Number + Assay Run ID + **Analysis Trial**), so re-running Activity Analysis with different parameters as a *new trial* yields two Activity instances for one `Folder Path`. That is `ACTIVITY_INSTANCE_AMBIGUOUS` and must fault (§9.3 step 5) — the software cannot know which trial the operator meant.
+- **Re-running the same trial overwrites its results.** "Rerun Analysis … current results will be overwritten." A re-export after a re-run therefore carries the same `Folder Path` with different numbers. The recording identity is already consumed, so the cycle is rejected — correct, and the operator must start a new cycle rather than re-analyse an old recording.
+- **A joint export mixes recordings.** This is how the reference file came to hold seven chips. It is normal operation, not misuse, which is why recording selection is a safety gate (§2.4).
+- **Editing Well Editor fields requires re-running the analysis** for the change to reach the export.
+- Do not rename `.h5` files, and do not put spaces in folder names — MaxLab Live may fail to resolve the path or export.
+
+## 4. Role of Claude Code
 
 Claude Code is used to design, implement, inspect, and test the automation software.
 
 Claude Code must not be part of the live experimental decision loop. During an experiment, a deterministic Python program must read the metrics workbook and apply a version-controlled decision rule. Never send workbook contents to an LLM and use free-form model output to choose a stimulation parameter.
 
-## 4. Sources of truth
+## 5. Sources of truth
 
 Read these files before implementing or changing behavior:
 
@@ -87,7 +140,7 @@ Read these files before implementing or changing behavior:
 - `config/metrics_schema.yaml`: workbook interpretation, recording selection, and the metric to read
 - `config/stimulation_protocols.yaml`: waveform, electrodes, amplitude step, and hard limits
 - `metrics_data_20260409_150425.xlsx`: the reference metrics export
-- **MaxLab Live Manual v25.1** (`mxw-maxlab-live-manual-v25.1.pdf`): the vendor GUI manual. It defines the exported metrics (§9.1.2, §9.2.3), the `Instance` key and Meta Data fields (§8.3.4), and the stimulation parameter ranges (§4 Sidebar, §7.3). It contains **no** Python API documentation.
+- **MaxLab Live Manual v25.1** (`mxw-maxlab-live-manual-v25.1.pdf`): the vendor GUI manual. It defines the exported metrics (manual §9.1.2, §9.2.3), the export procedure (§8.1, §8.3), the `Instance` key and Meta Data fields (§8.3.4), and the stimulation parameter ranges (§4 Sidebar, §7.5). Manual section numbers are cited as `manual §x`; bare `§x` always means a section of this file. It contains **no** Python API documentation.
 - local MaxLab examples under the installed MaxLab directory
 - the vendor API documentation matching the installed MaxLab/API versions
 - tests and recorded fixtures
@@ -105,7 +158,7 @@ Quote the manual, do not re-derive these.
 - **`Number of Configurations`** — "Number of configurations in a single recording file (for example, 7 configurations for a 7X Sparse ActivityScan Assay)." A Network assay is `1`. When it is greater than `1`, `Duration per Configuration [s]` is per configuration and not the total recording time.
 - **`Well Number`** — "always 1 for the MaxOne System."
 - **`DIV [days]`** — automatically calculated from the plating date entered in the Well Editor. `"N/A"` means no plating date was entered; it is not an error.
-- **Stimulation** — 32 stimulation channels may be connected simultaneously; pulses are voltage, biphasic, **positive phase first**. See §4.3.
+- **Stimulation** — 32 stimulation channels may be connected simultaneously; pulses are voltage, biphasic, **positive phase first**. See §5.3.
 
 ### 4.2 Still unresolved
 
@@ -114,7 +167,7 @@ Do not guess a value or a definition for any of them.
 - **The vendor Python API.** The manual documents the GUI only. The `maxlab` module, `mxwserver`, DAC codes, and the volts-to-bits calibration remain undocumented here. This is what blocks `adapters/real.py`.
 - **Charge injection capacity and the safe-amplitude rationale.** The manual defers to MaxWell's separate *Electrical Stimulation Guide* (`mxw.bio/MxW_Doc_Electrical_Stimulation_Guide`), which is behind an authenticated file share and has not been obtained.
 - **`Spikes per Burst per Electrode`.** The manual says "normalized by the total number of recorded electrodes", but in the reference export `Spikes per Burst` divided by it yields ~166.8 (`P005157`), ~247.8 (`P005169`), and ~190.2 (`P005190`) — not the ~1020 that `Active Area [%]` implies for the same recordings. The stated definition does not reproduce the data. This field is not on the decision path; do not use it.
-- Whether an adaptive run produces one new workbook per cycle, or appends recordings to an existing workbook. Both must be tolerated; see §8.
+- Whether an adaptive run produces one new workbook per cycle, or appends recordings to an existing workbook. Both must be tolerated; see §9.
 
 ### 4.3 Documented stimulation limits
 
@@ -134,7 +187,7 @@ From the manual. These are device and vendor-recommendation limits; the experime
 
 Treat 600 mV as a hard ceiling unless the Electrical Stimulation Guide is obtained and an operator explicitly authorises more. The configured `maximum_absolute_amplitude_mV` must never exceed it.
 
-## 5. Non-negotiable safety rules
+## 6. Non-negotiable safety rules
 
 - Default to `dry_run`; never default to live hardware operation.
 - Never execute an armed experiment from Claude Code.
@@ -152,7 +205,7 @@ Treat 600 mV as a hard ceiling unless the Electrical Stimulation Guide is obtain
 - A hardware adapter must return DAC outputs to the documented neutral state during normal completion and exception cleanup.
 - Do not convert volts to DAC bits until the installed hardware/API calibration has been verified.
 
-## 6. Operating modes
+## 7. Operating modes
 
 ### `simulate`
 
@@ -178,7 +231,7 @@ Permit hardware calls only when all conditions below are true:
 
 Never add a bypass, force, unsafe, debug-live, or auto-arm mode.
 
-## 7. Adaptive policy
+## 8. Adaptive policy
 
 Implement exactly this first policy:
 
@@ -221,7 +274,7 @@ Requirements:
 - Do not increase by more than one step per accepted recording.
 - Do not decrease amplitude or introduce adaptive pulse-shape changes unless the policy is explicitly revised and tested.
 
-## 8. Metrics watcher, selection, and validation
+## 9. Metrics watcher, selection, and validation
 
 ### 8.1 Watcher
 
@@ -275,18 +328,18 @@ Reject the recording, and therefore block stimulation, when any of these hold:
 
 - the resolved `Mean Firing Rate [Hz]` is missing, `"N/A"`, non-numeric, negative, or non-finite
 - `Active Area [%]` is missing or below `minimum_active_area_percent`
-- the number of contributing electrodes is below `minimum_active_electrodes`, derived as `Active Area [%] / 100 * routed_electrode_count` (§4.1: the routed count is not in the workbook and must be configured)
+- the number of contributing electrodes is below `minimum_active_electrodes`, derived as `Active Area [%] / 100 * routed_electrode_count` (§5.1: the routed count is not in the workbook and must be configured)
 - `Duration per Configuration [s]` is missing, or outside the configured expected range
 - `Number of Configurations` is not `1`
 - `Sampling Frequency [Hz]`, `Gain`, or `LSB [µV]` differ from the configured expected values
 - the recording `Start Time`/`Stop Time` are inconsistent with the active cycle window
 - `Analysis Parameters` for the selected instance differ from the configured expected analysis parameters
 
-The single-electrode case is why §8.4 exists. In the reference file `P005211` reports `Mean Firing Rate 0.19 Hz` with `Active Area 0.10 %` and `"N/A"` for standard deviation, CV, and every percentile — the mean is over exactly one electrode. That number is a valid float and would pass a naive numeric check while being meaningless as a well-level rate. A missing dispersion statistic alongside a present mean is a positive signal that the electrode count is one; treat it as such.
+The single-electrode case is why §9.4 exists. In the reference file `P005211` reports `Mean Firing Rate 0.19 Hz` with `Active Area 0.10 %` and `"N/A"` for standard deviation, CV, and every percentile — the mean is over exactly one electrode. That number is a valid float and would pass a naive numeric check while being meaningless as a well-level rate. A missing dispersion statistic alongside a present mean is a positive signal that the electrode count is one; treat it as such.
 
 Do not finalize the reader until representative workbooks have been inspected.
 
-## 9. Mean firing-frequency extraction
+## 10. Mean firing-frequency extraction
 
 The metric is already aggregated to the well level by MaxLab Live. There is no aggregation to perform and no spike-event counting to implement.
 
@@ -298,7 +351,7 @@ Read exactly one scalar:
 
 That value is `mean_firing_frequency_hz`, in Hz.
 
-`Mean Firing Rate [Hz]` is the mean over *active* electrodes only — the manual is explicit: "Only active electrodes are considered." An electrode is active when its firing rate exceeds `Firing Rate Threshold [Hz]` and its 90th-percentile spike amplitude exceeds `Amplitude Threshold [µV]` (`0.1 Hz` / `20 µV` in the reference file). It is **not** a mean over all recorded electrodes. The denominator therefore changes with culture activity, which is why `Active Area [%]` must be read and QC-checked alongside it (§8.4).
+`Mean Firing Rate [Hz]` is the mean over *active* electrodes only — the manual is explicit: "Only active electrodes are considered." An electrode is active when its firing rate exceeds `Firing Rate Threshold [Hz]` and its 90th-percentile spike amplitude exceeds `Amplitude Threshold [µV]` (`0.1 Hz` / `20 µV` in the reference file). It is **not** a mean over all recorded electrodes. The denominator therefore changes with culture activity, which is why `Active Area [%]` must be read and QC-checked alongside it (§9.4).
 
 Do not substitute `Median Firing Rate [Hz]`, any percentile column, or any `Network - Well Level` metric unless the policy is explicitly revised and tested. Do not compute a firing rate from `Network - Burst Level`.
 
@@ -316,7 +369,7 @@ The analysis output record must include:
 - schema version
 - analysis version
 
-## 10. State machine
+## 11. State machine
 
 Use a persisted state machine:
 
@@ -357,7 +410,7 @@ Persist every transition atomically with:
 
 Never automatically leave `FAULT` or `RECOVERY_REQUIRED`.
 
-## 11. Hardware abstraction
+## 12. Hardware abstraction
 
 All vendor calls must be behind an interface such as:
 
@@ -392,7 +445,7 @@ Real adapter requirements:
 - stop recording and clean up in `finally`
 - do not automatically retry ambiguous writes
 
-## 12. Configuration validation
+## 13. Configuration validation
 
 Implement typed configuration validation with Pydantic or an equivalent library.
 
@@ -416,7 +469,7 @@ Armed mode must be rejected when any of these are null or invalid:
 
 Keep machine-specific paths and electrode IDs in a local, gitignored override where practical.
 
-## 13. Idempotency and provenance
+## 14. Idempotency and provenance
 
 Use a transactional SQLite ledger or equivalent.
 
@@ -438,7 +491,7 @@ Record:
 
 Enforce uniqueness on the recording identity, not only on the workbook hash. Use an OS-level exclusive lock. Duplicate filesystem events must never cause duplicate stimulation.
 
-## 14. Tests
+## 15. Tests
 
 Before any hardware review, run:
 
@@ -507,7 +560,7 @@ Runtime:
 
 Unit and CI tests must mock the vendor API. Hardware-in-the-loop tests must be separate, explicit, and disabled by default.
 
-## 15. Repository layout
+## 16. Repository layout
 
 ```text
 maxone_loop/
@@ -538,7 +591,7 @@ workbook hash: `consumed_recordings` has a primary key on
 *before* stimulating. A crash between the claim and the write costs a cycle; it
 never repeats one.
 
-## 16. Claude Code workflow
+## 17. Claude Code workflow
 
 For each task:
 
@@ -556,7 +609,7 @@ For each task:
 
 If a required value is unknown, retain `null`, produce a clear validation error, and keep the project in `dry_run`.
 
-## 17. Initial implementation order
+## 18. Initial implementation order
 
 1. Inspect representative metrics workbooks.
 2. Finalize `config/metrics_schema.yaml`.

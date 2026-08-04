@@ -82,6 +82,43 @@ Skill は、後に「新しい metrics 形式を取り込む」「dry-run 解析
 - 累積刺激上限
 - 緊急停止手順
 
+## metrics workbook は自動生成されない（重要）
+
+記録が終わっても workbook は出ない。記録が生成するのは **raw `.h5` のみ**である。workbook は、その記録に対して**解析を実行し、さらにエクスポートを行って初めて**生成される。したがって適応ループの各サイクルには**人手の工程が入り**、`WAITING_FOR_METRICS` は装置ではなく人を待っている。
+
+### 1サイクルの手順（Manual v25.1 §8）
+
+1. assay を記録する（raw `.h5` が書かれる）
+2. **Analysis** タブでその記録を選択
+3. 解析モジュールを選ぶ。**判定指標は `Activity Analysis` から取る。** Network Assay の既定は `Network Analysis` なので、Activity Analysis を明示的に選ぶ必要がある（マニュアル：「Network Assay に対して Activity Analysis を行うこともできる」）。Network Analysis だけを実行すると `Activity - Well Level` シートが生成されず、サイクルは進めない
+4. 解析パラメータが `expected_analysis_parameters`（`0.1 Hz` / `20 µV` / `200 ms`）と一致することを確認する。不一致は警告ではなく QC 失敗
+5. **Start Analysis** を押し、trial のステータスアイコンが *Completed* になるまで待つ
+6. エクスポート：単一 trial なら **Export Metrics**、複数なら各 trial の **Select for joint export** を有効にして **Export Selected**
+7. ダイアログで保存先を指定し、`.xls` 形式を選ぶ
+
+### 出力先はタイムスタンプ付きサブフォルダ
+
+「エクスポートされた metrics は、エクスポートを実行した日時をラベルとするフォルダに保存される」。つまり workbook は指定した保存先の**直下ではなく、新しいタイムスタンプ付きサブディレクトリの中**に現れる。`metrics_watcher.recursive` は `true` のままにし、`paths.metrics_watch_directory` にはオペレータがエクスポートする**親ディレクトリ**を指定すること。
+
+活動の多い培養で全 metrics を `.xls` 出力すると「数分かかる場合がある」ため、安定ファイル検出は実際に意味を持つ。
+
+### エクスポート選択でシート構成が変わる
+
+| 選択 | 生成されるシート |
+|---|---|
+| Export summary metrics | well レベルのみ |
+| Export all metrics | 加えて electrode/spike レベル・burst レベル |
+
+判定経路が使うのは `Meta Data` / `Analysis Parameters` / `Activity - Well Level` の3枚だけなので、**必須はこの3枚のみ**とした。`Network - *` は任意扱いである（summary エクスポートでは存在せず、Network Analysis trial を含めなければそもそも存在しない）。必須にすると正常なエクスポートを読めなくなる。ただし**未知のシートは従来どおり fail closed** とする（形式変更を意味するため）。
+
+### ソフトウェア側が守るべき帰結
+
+- **1つの記録に複数の Activity Analysis trial がぶら下がりうる。** `Instance` は (Well Plate ID + Well Number + Assay Run ID + **Analysis Trial**) ごとに割り当てられるため、パラメータを変えて**新規 trial** として再実行すると、同一 `Folder Path` に Activity instance が2つできる。これは `ACTIVITY_INSTANCE_AMBIGUOUS` で FAULT とする（どちらを意図したかソフトには判定できない）
+- **同一 trial の再実行は結果を上書きする**（「Rerun Analysis … current results will be overwritten」）。再実行後の再エクスポートは同じ `Folder Path` に別の数値を載せてくるが、その識別子は消費済みなので拒否される。過去の記録を再解析するのではなく、新しいサイクルを回すこと
+- **joint export は複数記録を混ぜる。** 参照ファイルが7チップを含むのはこのため。誤用ではなく通常運用であり、レコーディング選択が安全ゲートである理由でもある
+- Well Editor の情報を変更した場合、**解析を再実行しないとエクスポートに反映されない**
+- `.h5` をリネームしない。フォルダ名に空白を入れない（MaxLab Live が path 解決やエクスポートに失敗しうる）
+
 ## ベンダーマニュアルで確定した定義
 
 MaxLab Live Manual v25.1 により以下が確定した（CLAUDE.md §4.1）。
